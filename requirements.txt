@@ -1,4 +1,6 @@
 glfw==2.9.0
-glm==0.4.4
+networkx==3.4.2
 numpy==2.2.6
+pyglm==2.8.2
 PyOpenGL==3.1.9
+PyOpenGL-accelerate==3.1.9

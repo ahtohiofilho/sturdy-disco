@@ -1,10 +1,10 @@
 # main.py
 
 from window import Window
+from contexto import Contexto
 
 if __name__ == "__main__":
-    # Cria a instância da janela fullscreen
-    app = Window()
-
-    # Inicia o loop principal da aplicação
+    contexto = Contexto()
+    app = Window("Sturdy Disco", contexto)
     app.run()
+

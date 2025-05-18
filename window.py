@@ -1,13 +1,32 @@
 # window.py
 
-import sys
 import glfw
 from OpenGL.GL import *
+import sys
+from rendering.renderer import Renderer
 
 class Window:
-    def __init__(self, title="Janela Fullscreen"):
+    def __init__(self, title, contexto):
         self.title = title
         self.window = None
+        self.contexto = contexto
+
+    def key_callback(self, window, key, scancode, action, mods):
+        """Função de callback para teclas"""
+        if action == glfw.PRESS or action == glfw.REPEAT:
+            camera = self.contexto.camera  # Acessa a câmera do contexto
+            sensibilidade = 1.0
+
+            if key == glfw.KEY_UP:
+                camera.rotate_pitch(sensibilidade)
+            elif key == glfw.KEY_DOWN:
+                camera.rotate_pitch(-sensibilidade)
+            elif key == glfw.KEY_LEFT:
+                camera.rotate_yaw(sensibilidade)
+            elif key == glfw.KEY_RIGHT:
+                camera.rotate_yaw(-sensibilidade)
+            elif key == glfw.KEY_ESCAPE:
+                glfw.set_window_should_close(window, True)
 
     def init_glfw(self):
         if not glfw.init():
@@ -46,18 +65,11 @@ class Window:
             return False
 
         glfw.make_context_current(self.window)
+
+        # Define o callback de tecla
+        glfw.set_key_callback(self.window, self.key_callback)
+
         return True
-
-    def main_loop(self):
-        glClearColor(0.1, 0.2, 0.5, 1.0)  # Cor de fundo
-
-        while not glfw.window_should_close(self.window):
-            glClear(GL_COLOR_BUFFER_BIT)
-
-            # Lógica de renderização vai aqui
-
-            glfw.swap_buffers(self.window)
-            glfw.poll_events()
 
     def run(self):
         if not self.init_glfw():
@@ -72,3 +84,26 @@ class Window:
         if self.window:
             glfw.destroy_window(self.window)
         glfw.terminate()
+
+    def main_loop(self):
+        glClearColor(0.0, 0.0, 0.0, 1.0)
+        glEnable(GL_DEPTH_TEST)
+
+        # Inicializa o renderer com o contexto
+        renderer = Renderer(self.contexto)
+
+        while not glfw.window_should_close(self.window):
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+            # Atualiza câmera (ex: view matrix)
+            self.contexto.camera.update()
+            view_matrix = self.contexto.camera.get_view_matrix()
+
+            # Passa a matriz de câmera para o shader (opcional por enquanto)
+            # renderer.set_view_matrix(view_matrix)
+
+            # Renderiza os polígonos via Renderer
+            renderer.render()
+
+            glfw.swap_buffers(self.window)
+            glfw.poll_events()
