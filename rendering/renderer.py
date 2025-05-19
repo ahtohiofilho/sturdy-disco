@@ -1,5 +1,4 @@
 # rendering/renderer.py
-
 from OpenGL.GL import *
 import numpy as np
 from rendering.buffers import prepare_buffers
@@ -12,29 +11,108 @@ class Renderer:
         self.contexto = contexto
         self.vao = None
         self.vertex_count = 0
-        self.shader = None
         self.polygon_types = []
+
+        # Dois shaders distintos
+        self.render_shader = None
+        self.picking_shader = None
+
+        # Inicializa shaders e buffers
         self.setup()
+        self.init_picking_framebuffer(contexto.window.width, contexto.window.height)
+
+    def init_picking_framebuffer(self, width, height):
+        self.picking_fbo = glGenFramebuffers(1)
+        glBindFramebuffer(GL_FRAMEBUFFER, self.picking_fbo)
+
+        # Textura do picking
+        self.picking_texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.picking_texture)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, None)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, self.picking_texture, 0)
+
+        # Renderbuffer para profundidade
+        self.depth_rb = glGenRenderbuffers(1)
+        glBindRenderbuffer(GL_RENDERBUFFER, self.depth_rb)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, self.depth_rb)
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+    def render_picking_pass(self):
+        glBindFramebuffer(GL_FRAMEBUFFER, self.picking_fbo)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+        self.picking_shader.use()
+
+        # Obter tamanho da janela para aspect ratio
+        window_size = glfw.get_framebuffer_size(glfw.get_current_context())
+        if window_size[1] == 0:
+            aspect = 1.0
+        else:
+            aspect = window_size[0] / window_size[1]
+
+        # Criar matriz de projeção perspectiva com pyglm
+        projection = glm.perspective(glm.radians(45.0), aspect, 0.1, 100.0)
+        view = self.contexto.camera.get_view_matrix()
+
+        # Passar uniforms
+        proj_loc = glGetUniformLocation(self.picking_shader.program, "projection")
+        view_loc = glGetUniformLocation(self.picking_shader.program, "view")
+
+        if proj_loc != -1:
+            glUniformMatrix4fv(proj_loc, 1, GL_FALSE, glm.value_ptr(projection))
+        if view_loc != -1:
+            glUniformMatrix4fv(view_loc, 1, GL_FALSE, glm.value_ptr(view))
+
+        # Desenhar vértices
+        glBindVertexArray(self.vao)
+        offset = 0
+        for i, sides in enumerate(self.polygon_types):
+            r = ((i >> 0) & 0xFF) / 255.0
+            g = ((i >> 8) & 0xFF) / 255.0
+            b = ((i >> 16) & 0xFF) / 255.0
+            glUniform3f(glGetUniformLocation(self.picking_shader.program, "picking_color"), r, g, b)
+
+            mode = GL_TRIANGLE_FAN if sides == 5 or sides == 6 else GL_TRIANGLES
+            glDrawArrays(mode, offset, sides)
+            offset += sides
+
+        glBindVertexArray(0)
+        self.picking_shader.unuse()
 
     def setup(self):
         try:
-            with open("shaders/vertex.glsl", "r") as f:
+            # Carregar shaders normais
+            with open("shaders/render_vs.glsl", "r") as f:
                 vertex_source = f.read()
-            with open("shaders/fragment.glsl", "r") as f:
+            with open("shaders/render_fs.glsl", "r") as f:
                 fragment_source = f.read()
+
+            # Carregar shaders de picking
+            with open("shaders/picking_vs.glsl", "r") as f:
+                picking_vertex_source = f.read()
+            with open("shaders/picking_fs.glsl", "r") as f:
+                picking_fragment_source = f.read()
+
         except FileNotFoundError as e:
             print(f"Erro: Arquivo de shader não encontrado - {e}")
             raise
 
-        if not vertex_source or not fragment_source:
+        if not all([vertex_source, fragment_source, picking_vertex_source, picking_fragment_source]):
             raise ValueError("Fonte do shader não pode ser vazia.")
 
-        self.shader = Shader(vertex_source, fragment_source)
+        # Compilar dois shaders distintos
+        self.render_shader = Shader(vertex_source, fragment_source)
+        self.picking_shader = Shader(picking_vertex_source, picking_fragment_source)
 
-        # Atualizado: agora pegamos 3 valores
+        # Preparar buffers
         vertices, colors, self.polygon_types = prepare_buffers(self.contexto)
-        self.vertex_count = len(vertices) // 3  # Número total de vértices
+        self.vertex_count = len(vertices) // 3
 
+        # Configurar VAO/VBOs
         self.vao = glGenVertexArrays(1)
         glBindVertexArray(self.vao)
 
@@ -53,7 +131,7 @@ class Renderer:
         glBindVertexArray(0)
 
     def render(self):
-        self.shader.use()
+        self.render_shader.use()
 
         # Obter tamanho da janela para aspect ratio
         window_size = glfw.get_framebuffer_size(glfw.get_current_context())
@@ -65,22 +143,20 @@ class Renderer:
         # Criar matriz de projeção perspectiva com pyglm
         projection = glm.perspective(glm.radians(45.0), aspect, 0.1, 100.0)
 
-        # Obter matriz de view da câmera
-        view = self.contexto.camera.get_view_matrix()  # Deve retornar glm.mat4
+        # Obter view matrix da câmera
+        view = self.contexto.camera.get_view_matrix()
 
         # Passar as matrizes para o shader
-        proj_loc = glGetUniformLocation(self.shader.program, "projection")
-        view_loc = glGetUniformLocation(self.shader.program, "view")
+        proj_loc = glGetUniformLocation(self.render_shader.program, "projection")
+        view_loc = glGetUniformLocation(self.render_shader.program, "view")
 
         if proj_loc != -1:
             glUniformMatrix4fv(proj_loc, 1, GL_FALSE, glm.value_ptr(projection))
-
         if view_loc != -1:
             glUniformMatrix4fv(view_loc, 1, GL_FALSE, glm.value_ptr(view))
 
         # Desenhar os polígonos individualmente
         glBindVertexArray(self.vao)
-
         offset = 0
         for sides in self.polygon_types:
             mode = GL_TRIANGLE_FAN if sides == 5 or sides == 6 else GL_TRIANGLES
@@ -88,4 +164,4 @@ class Renderer:
             offset += sides
 
         glBindVertexArray(0)
-        self.shader.unuse()
+        self.render_shader.unuse()

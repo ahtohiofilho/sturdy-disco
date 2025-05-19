@@ -1,0 +1,1569 @@
+Conteúdo do arquivo README.md:
+# sturdy-disco
+
+# Sphere-Based Civilization Game
+
+A prototype civilization simulation game rendered on a spherical world, built with modern OpenGL using Python.
+
+This project aims to create a 3D spherical world for strategy and civilization gameplay, using OpenGL for rendering and GLFW for window and input management. The current implementation provides the foundation for rendering a **polyhedral sphere** (Goldberg G(2,0)) composed of **hexagons and pentagons**, with biome-based coloring and orbit camera controls.
+
+---
+
+## 🌍 Current State
+
+### ✅ Core Features Implemented:
+- **Window Management**:  
+  - Fullscreen OpenGL context setup using GLFW.  
+  - Graceful shutdown via ESC key.
+  - Modular class-based structure (`Window` class).
+
+- **Shader System**:  
+  - Class-based shader manager (`Shader`) for compiling and linking vertex and fragment shaders.  
+  - Support for dynamic uniform updates (projection/view matrices).
+  - Ready for future expansion with lighting or texturing.
+
+- **3D Spherical World Rendering**:  
+  - Generation of a Goldberg polyhedron (G(2,0)) with 12 pentagons and multiple hexagons  
+  - Each polygon is colored according to its biome type (e.g., prairie, ocean, desert, etc.)
+  - Rendered using `GL_TRIANGLE_FAN` per face for accurate topology
+
+- **Camera System**:  
+  - Orbit-style camera with yaw/pitch control via keyboard
+  - Dynamic view matrix generation using `pyglm`
+
+- **Geographic Data Engine**:  
+  - Biome classification based on altitude, moisture, and solar incidence
+  - Movement cost and agricultural productivity assigned per biome
+  - Graph-based representation of regions and connections
+
+- **Modular Architecture**:  
+  - Clean separation of concerns:  
+    - `contexto.py`: global state and integration point  
+    - `renderer.py`: rendering pipeline  
+    - `geografia.py`: geography engine  
+    - `poligonos.py`: polyhedron geometry generator  
+
+---
+
+## 🧰 Dependencies
+
+### Required:
+```bash
+pip install glfw PyOpenGL networkx numpy pyglm
+
+Project Structure
+
+sturdy-disco/
+├── main.py              # Entry point: creates Window instance and runs the app
+├── contexto.py          # Central Context object that holds geografia, camera, and renderer
+├── window.py            # Manages GLFW lifecycle and input callbacks
+├── rendering/
+|   ├── shader.py            # Shader compilation and usage logic
+│   ├── renderer.py      # Renderer class with VAO/VBO and draw loop
+│   └── buffers.py       # Buffer preparation for OpenGL
+├── utils/
+│   ├── polygons.py      # Generates 3D coordinates for polyhedron faces
+│   └── geography.py     # Biome assignment, graph definition, and node metadata
+└── shaders/
+    ├── vertex.glsl        # Vertex shader with projection/view uniforms
+    └── fragment.glsl      # Fragment shader with flat color output
+
+Conteúdo do arquivo main.py:
+# main.py
+
+from window import Window
+from contexto import Contexto
+
+if __name__ == "__main__":
+    contexto = Contexto()
+    contexto.window = Window("Sturdy Disco", contexto)
+    contexto.window.run()
+
+
+
+Conteúdo do arquivo window.py:
+# window.py
+
+import glfw
+from OpenGL.GL import *
+import sys
+from rendering.renderer import Renderer
+from camera import Camera
+
+class Window:
+    def __init__(self, title, contexto):
+        self.title = title
+        self.window = None
+        self.contexto = contexto
+        self.keys = {}
+        self.renderer = None
+
+        # Inicializa a câmera aqui, usando o fator do contexto
+        self.camera = Camera(
+            fator=contexto.fator,
+            position=[0, 0, 10],
+            target=[0, 0, 0],
+            aspect_ratio=16/9  # Valor padrão (será atualizado após criar a janela)
+        )
+        contexto.camera = self.camera  # Atualiza o contexto com a câmera criada
+
+    def key_callback(self, window, key, scancode, action, mods):
+        if key == glfw.KEY_UP or key == glfw.KEY_DOWN or key == glfw.KEY_LEFT or key == glfw.KEY_RIGHT or key == glfw.KEY_ESCAPE:
+            self.keys[key] = action != glfw.RELEASE
+
+    def mouse_callback(self, window, button, action, mods):
+        if button == glfw.MOUSE_BUTTON_LEFT and action == glfw.PRESS:
+            x, y = glfw.get_cursor_pos(window)
+            width, height = glfw.get_framebuffer_size(window)
+            key = self.read_pixel_at(x, y, width, height)
+            if key is not None:
+                self.show_province_menu(key)
+
+    def read_pixel_at(self, x, y, width, height):
+        glBindFramebuffer(GL_FRAMEBUFFER, self.renderer.picking_fbo)
+
+        px = int(x)
+        py = int(height - y - 1)
+
+        # Garante que as coordenadas estão dentro da tela
+        px = max(0, min(px, width - 1))
+        py = max(0, min(py, height - 1))
+
+        data = glReadPixels(px, py, 1, 1, GL_RGB, GL_FLOAT)
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+        # Aqui está a correção: garante que data tem os 3 valores RGB
+        if len(data.shape) == 3 and data.shape[0] == 1 and data.shape[1] == 1 and data.shape[2] == 3:
+            r, g, b = data[0][0]
+        elif len(data) == 3:
+            r, g, b = data
+        else:
+            print(f"Erro ao ler pixel: dado inválido retornado {data}")
+            return None
+
+        id = int(r * 255) + int(g * 255) * 256 + int(b * 255) * 256 * 256
+        nodes = list(self.contexto.geografia.nodes.keys())
+
+        if id >= len(nodes):
+            print(f"[ERRO] ID {id} fora do intervalo. Total de nós: {len(nodes)}")
+            return None
+
+        return nodes[id]
+        
+    def show_province_menu(self, key):
+        node_data = self.contexto.geografia.nodes[key]
+        print("=== Província Selecionada ===")
+        print(f"Coordenadas: {key}")
+        print(f"Bioma: {node_data.get('bioma', 'N/A')}")
+        print(f"Temperatura: {node_data.get('temperatura', 'N/A')}°C")
+        print(f"Altitude: {node_data.get('altitude', 'N/A')}")
+        print(f"Umidade: {node_data.get('umidade', 'N/A')}")
+        print(f"Placa Tectônica: {node_data.get('placa', 'N/A')}")
+        print(f"Letra Grega: {node_data.get('letra_grega', 'N/A')}")
+        print("==============================")
+
+    def init_glfw(self):
+        if not glfw.init():
+            print("Erro: não foi possível inicializar o GLFW.")
+            return False
+
+        monitor = glfw.get_primary_monitor()
+        video_mode = glfw.get_video_mode(monitor)
+        """
+        red_bits = video_mode.bits.red
+        green_bits = video_mode.bits.green
+        blue_bits = video_mode.bits.blue
+        refresh_rate = video_mode.refresh_rate
+
+        glfw.window_hint(glfw.RED_BITS, red_bits)
+        glfw.window_hint(glfw.GREEN_BITS, green_bits)
+        glfw.window_hint(glfw.BLUE_BITS, blue_bits)
+        glfw.window_hint(glfw.REFRESH_RATE, refresh_rate)
+        """
+        self.window = glfw.create_window(video_mode.size.width, video_mode.size.height, self.title, monitor, None)
+
+        if not self.window:
+            print("Erro: falha ao criar a janela GLFW.")
+            glfw.terminate()
+            return False
+
+        glfw.make_context_current(self.window)
+        
+        # Atualiza o aspect ratio da câmera com o tamanho real da janela
+        self.width, self.height = glfw.get_framebuffer_size(self.window)
+        self.camera.aspect_ratio = self.width / self.height if self.height != 0 else 16/9
+        
+        # Configura callbacks
+        glfw.set_key_callback(self.window, self.key_callback)
+        glfw.set_mouse_button_callback(self.window, self.mouse_callback)
+
+        return True
+
+    def run(self):
+        if not self.init_glfw():
+            sys.exit(1)
+
+        try:
+            self.main_loop()
+        finally:
+            self.cleanup()
+
+    def cleanup(self):
+        if self.window:
+            glfw.destroy_window(self.window)
+        glfw.terminate()
+
+    def main_loop(self):
+        glClearColor(0.0, 0.0, 0.0, 1.0)
+        glEnable(GL_DEPTH_TEST)
+
+        # Inicializa o renderer com o contexto
+        self.renderer = Renderer(self.contexto)
+        last_time = glfw.get_time()
+
+        self.renderer.init_picking_framebuffer(self.width, self.height)
+
+        while not glfw.window_should_close(self.window):
+            glClearColor(0.0, 0.0, 0.0, 1.0)
+            current_time = glfw.get_time()
+            delta_time = current_time - last_time
+            last_time = current_time
+
+            # Movimento contínuo da câmera
+            camera = self.contexto.camera
+            sensitivity = 1.0
+
+            if self.keys.get(glfw.KEY_UP):
+                camera.rotate_pitch(sensitivity * delta_time * 100)
+            if self.keys.get(glfw.KEY_DOWN):
+                camera.rotate_pitch(-sensitivity * delta_time * 100)
+            if self.keys.get(glfw.KEY_LEFT):
+                camera.rotate_yaw(sensitivity * delta_time * 100)
+            if self.keys.get(glfw.KEY_RIGHT):
+                camera.rotate_yaw(-sensitivity * delta_time * 100)
+
+            # Detecta ESC e fecha a janela
+            if self.keys.get(glfw.KEY_ESCAPE):
+                glfw.set_window_should_close(self.window, True)
+
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+            # Atualiza câmera (ex: view matrix)
+            self.contexto.camera.update()
+            self.renderer.render_picking_pass()
+            glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+            # Renderiza os polígonos via Renderer
+            self.renderer.render()
+
+            glfw.swap_buffers(self.window)
+            glfw.poll_events()
+
+Conteúdo do arquivo contexto.py:
+from utils.poligonos import dicionario_poligonos
+from utils.geografia import definir_geografia
+
+class Contexto:
+    def __init__(self, fator=3):
+        self.fator = fator
+        self.poligonos = dicionario_poligonos(fator)
+        self.geografia, self.num_civ = definir_geografia(self.poligonos, fator)
+
+Conteúdo do arquivo camera.py:
+# camera.py
+import numpy as np
+from math import sin, cos, radians, pi
+import glm
+import glfw
+import math
+
+
+class Camera:
+    def __init__(self, fator, position=(0, 0, 5), target=(0, 0, 0), up=(0, 1, 0), aspect_ratio=16/9):
+        self.target = np.array(target, dtype=np.float32)
+        self.world_up = np.array(up, dtype=np.float32)
+        self.yaw = -90.0   # Olhando para +z inicialmente
+        self.pitch = 0.0
+        self.speed = 0.5
+        self.sensitivity = 0.3
+        self.aspect_ratio = aspect_ratio
+
+        # Calcula o raio do planeta com base no fator
+        self.raio_planeta = fator / (2 * math.sin(math.pi / 5))
+
+        # Define posição inicial com base no raio
+        distance = 3.0 * self.raio_planeta  # 3 raios de distância
+        self.position = np.array(position if position is not None else [0, 0, distance], dtype=np.float32)
+
+        # Obter proporção da tela
+        self.aspect_ratio = self.get_screen_aspect_ratio() or 16 / 9
+
+        # Inicializa vetores de câmera
+        self.front = np.array([0.0, 0.0, 0.0])
+        self.right = np.array([0.0, 0.0, 0.0])
+        self.up = np.array([0.0, 0.0, 0.0])
+
+        # Atualiza vetores com base na posição inicial
+        self.update()
+        self._update_position_from_angles()
+
+    @staticmethod
+    def get_screen_aspect_ratio():
+        if not glfw.init():
+            print("Erro ao inicializar GLFW")
+            return None
+
+        # Criar uma janela temporária para obter informações
+        glfw.window_hint(glfw.VISIBLE, False)  # Ocultar a janela
+        window = glfw.create_window(800, 600, "Temp", None, None)
+
+        if not window:
+            print("Erro ao criar janela GLFW")
+            glfw.terminate()
+            return None
+
+        glfw.make_context_current(window)
+        width, height = glfw.get_framebuffer_size(window)
+        glfw.destroy_window(window)
+        glfw.terminate()
+
+        return width / height
+
+    def get_view_matrix(self):
+        return glm.lookAt(
+            glm.vec3(*self.position),
+            glm.vec3(*self.target),
+            glm.vec3(*self.world_up)
+        )
+
+    def get_projection_matrix(self):
+        return glm.perspective(glm.radians(45.0), self.aspect_ratio, 0.1, 100.0 * self.raio_planeta)
+
+    def update(self):
+        front = np.array([
+            cos(radians(self.yaw)) * cos(radians(self.pitch)),
+            sin(radians(self.pitch)),
+            sin(radians(self.yaw)) * cos(radians(self.pitch))
+        ])
+        self.front = front / np.linalg.norm(front)
+        self.right = np.cross(self.front, self.world_up)
+        self.right /= np.linalg.norm(self.right)
+        self.up = np.cross(self.right, self.front)
+        self.up /= np.linalg.norm(self.up)
+
+    def rotate_yaw(self, angle):
+        self.yaw += angle
+        self.update()
+        self._update_position_from_angles()
+
+    def rotate_pitch(self, angle):
+        self.pitch = np.clip(self.pitch + angle, -89.0, 89.0)
+        self.update()
+        self._update_position_from_angles()
+
+    def _update_position_from_angles(self):
+        radius = np.linalg.norm(self.position - self.target)
+        self.position = self.target + np.array([
+            cos(radians(self.yaw)) * cos(radians(self.pitch)),
+            sin(radians(self.pitch)),
+            sin(radians(self.yaw)) * cos(radians(self.pitch))
+        ]) * radius
+
+    def _look_at(self, eye, center, up):
+        f = (center - eye)
+        f /= np.linalg.norm(f)
+        s = np.cross(f, up)
+        s /= np.linalg.norm(s)
+        u = np.cross(s, f)
+        u /= np.linalg.norm(u)
+
+        view = np.identity(4, dtype=np.float32)
+        view[0, :3] = s
+        view[1, :3] = u
+        view[2, :3] = -f
+        view[:3, 3] = -np.dot(s, eye), -np.dot(u, eye), np.dot(f, eye)
+        return view
+
+Conteúdo do arquivo buffers.py:
+# rendering/buffers.py
+
+import numpy as np
+
+def prepare_buffers(contexto):
+    vertices = []
+    colors = []
+    polygon_types = []
+
+    for key in contexto.geografia.nodes:
+        try:
+            verts = contexto.poligonos[key]
+        except KeyError:
+            continue
+
+        node_data = contexto.geografia.nodes[key]
+        color = node_data.get('cor_bioma', (255, 255, 255))
+        r, g, b = [c / 255.0 for c in color]
+
+        polygon_types.append(len(verts))  # salva quantos vértices esse poligono tem
+
+        for v in verts:
+            vertices.extend(v)
+            colors.extend([r, g, b])
+
+    return (
+        np.array(vertices, dtype=np.float32),
+        np.array(colors, dtype=np.float32),
+        polygon_types
+    )
+
+Conteúdo do arquivo renderer.py:
+# rendering/renderer.py
+from OpenGL.GL import *
+import numpy as np
+from rendering.buffers import prepare_buffers
+from rendering.shader import Shader
+import glm
+import glfw
+
+class Renderer:
+    def __init__(self, contexto):
+        self.contexto = contexto
+        self.vao = None
+        self.vertex_count = 0
+        self.polygon_types = []
+
+        # Dois shaders distintos
+        self.render_shader = None
+        self.picking_shader = None
+
+        # Inicializa shaders e buffers
+        self.setup()
+        self.init_picking_framebuffer(contexto.window.width, contexto.window.height)
+
+    def init_picking_framebuffer(self, width, height):
+        self.picking_fbo = glGenFramebuffers(1)
+        glBindFramebuffer(GL_FRAMEBUFFER, self.picking_fbo)
+
+        # Textura do picking
+        self.picking_texture = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, self.picking_texture)
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB32F, width, height, 0, GL_RGB, GL_FLOAT, None)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, self.picking_texture, 0)
+
+        # Renderbuffer para profundidade
+        self.depth_rb = glGenRenderbuffers(1)
+        glBindRenderbuffer(GL_RENDERBUFFER, self.depth_rb)
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, width, height)
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, self.depth_rb)
+
+        glBindFramebuffer(GL_FRAMEBUFFER, 0)
+
+    def render_picking_pass(self):
+        glBindFramebuffer(GL_FRAMEBUFFER, self.picking_fbo)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+        self.picking_shader.use()
+
+        # Obter tamanho da janela para aspect ratio
+        window_size = glfw.get_framebuffer_size(glfw.get_current_context())
+        if window_size[1] == 0:
+            aspect = 1.0
+        else:
+            aspect = window_size[0] / window_size[1]
+
+        # Criar matriz de projeção perspectiva com pyglm
+        projection = glm.perspective(glm.radians(45.0), aspect, 0.1, 100.0)
+        view = self.contexto.camera.get_view_matrix()
+
+        # Passar uniforms
+        proj_loc = glGetUniformLocation(self.picking_shader.program, "projection")
+        view_loc = glGetUniformLocation(self.picking_shader.program, "view")
+
+        if proj_loc != -1:
+            glUniformMatrix4fv(proj_loc, 1, GL_FALSE, glm.value_ptr(projection))
+        if view_loc != -1:
+            glUniformMatrix4fv(view_loc, 1, GL_FALSE, glm.value_ptr(view))
+
+        # Desenhar vértices
+        glBindVertexArray(self.vao)
+        offset = 0
+        for i, sides in enumerate(self.polygon_types):
+            r = ((i >> 0) & 0xFF) / 255.0
+            g = ((i >> 8) & 0xFF) / 255.0
+            b = ((i >> 16) & 0xFF) / 255.0
+            glUniform3f(glGetUniformLocation(self.picking_shader.program, "picking_color"), r, g, b)
+
+            mode = GL_TRIANGLE_FAN if sides == 5 or sides == 6 else GL_TRIANGLES
+            glDrawArrays(mode, offset, sides)
+            offset += sides
+
+        glBindVertexArray(0)
+        self.picking_shader.unuse()
+
+    def setup(self):
+        try:
+            # Carregar shaders normais
+            with open("shaders/render_vs.glsl", "r") as f:
+                vertex_source = f.read()
+            with open("shaders/render_fs.glsl", "r") as f:
+                fragment_source = f.read()
+
+            # Carregar shaders de picking
+            with open("shaders/picking_vs.glsl", "r") as f:
+                picking_vertex_source = f.read()
+            with open("shaders/picking_fs.glsl", "r") as f:
+                picking_fragment_source = f.read()
+
+        except FileNotFoundError as e:
+            print(f"Erro: Arquivo de shader não encontrado - {e}")
+            raise
+
+        if not all([vertex_source, fragment_source, picking_vertex_source, picking_fragment_source]):
+            raise ValueError("Fonte do shader não pode ser vazia.")
+
+        # Compilar dois shaders distintos
+        self.render_shader = Shader(vertex_source, fragment_source)
+        self.picking_shader = Shader(picking_vertex_source, picking_fragment_source)
+
+        # Preparar buffers
+        vertices, colors, self.polygon_types = prepare_buffers(self.contexto)
+        self.vertex_count = len(vertices) // 3
+
+        # Configurar VAO/VBOs
+        self.vao = glGenVertexArrays(1)
+        glBindVertexArray(self.vao)
+
+        vbo_vertices = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_vertices)
+        glBufferData(GL_ARRAY_BUFFER, vertices.nbytes, vertices, GL_STATIC_DRAW)
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 0, None)
+        glEnableVertexAttribArray(0)
+
+        vbo_colors = glGenBuffers(1)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo_colors)
+        glBufferData(GL_ARRAY_BUFFER, colors.nbytes, colors, GL_STATIC_DRAW)
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 0, None)
+        glEnableVertexAttribArray(1)
+
+        glBindVertexArray(0)
+
+    def render(self):
+        self.render_shader.use()
+
+        # Obter tamanho da janela para aspect ratio
+        window_size = glfw.get_framebuffer_size(glfw.get_current_context())
+        if window_size[1] == 0:
+            aspect = 1.0
+        else:
+            aspect = window_size[0] / window_size[1]
+
+        # Criar matriz de projeção perspectiva com pyglm
+        projection = glm.perspective(glm.radians(45.0), aspect, 0.1, 100.0)
+
+        # Obter view matrix da câmera
+        view = self.contexto.camera.get_view_matrix()
+
+        # Passar as matrizes para o shader
+        proj_loc = glGetUniformLocation(self.render_shader.program, "projection")
+        view_loc = glGetUniformLocation(self.render_shader.program, "view")
+
+        if proj_loc != -1:
+            glUniformMatrix4fv(proj_loc, 1, GL_FALSE, glm.value_ptr(projection))
+        if view_loc != -1:
+            glUniformMatrix4fv(view_loc, 1, GL_FALSE, glm.value_ptr(view))
+
+        # Desenhar os polígonos individualmente
+        glBindVertexArray(self.vao)
+        offset = 0
+        for sides in self.polygon_types:
+            mode = GL_TRIANGLE_FAN if sides == 5 or sides == 6 else GL_TRIANGLES
+            glDrawArrays(mode, offset, sides)
+            offset += sides
+
+        glBindVertexArray(0)
+        self.render_shader.unuse()
+
+Conteúdo do arquivo picking_fs.glsl:
+#version 330 core
+uniform vec3 picking_color;
+
+out vec4 outColor;
+
+void main() {
+    outColor = vec4(picking_color, 1.0);
+}
+
+Conteúdo do arquivo picking_vs.glsl:
+#version 330 core
+layout(location = 0) in vec3 position;
+uniform mat4 projection;
+uniform mat4 view;
+
+out vec3 fragPickingColor;  // Não usado aqui, mas pode ser útil no futuro
+
+void main() {
+    gl_Position = projection * view * vec4(position, 1.0);
+}
+
+Conteúdo do arquivo render_fs.glsl:
+#version 330 core
+in vec3 fragColor;
+out vec4 outColor;
+
+void main() {
+    outColor = vec4(fragColor, 1.0);
+}
+
+Conteúdo do arquivo render_vs.glsl:
+#version 330 core
+layout(location = 0) in vec3 position;
+layout(location = 1) in vec3 color;
+
+out vec3 fragColor;
+
+uniform mat4 view;
+uniform mat4 projection;
+
+void main() {
+    gl_Position = projection * view * vec4(position, 1.0);
+    fragColor = color;
+}
+
+Conteúdo do arquivo geografia.py:
+# utils/geography.py
+
+import json
+import networkx
+import random
+import math
+from statistics import mean
+
+def letra_grega(placa):
+    letras_gregas_dict = {
+        "Alpha": "Α", "Beta": "Β", "Gamma": "Γ", "Delta": "Δ",
+        "Epsilon": "Ε", "Zeta": "Ζ", "Eta": "Η", "Theta": "Θ",
+        "Iota": "Ι", "Kappa": "Κ", "Lambda": "Λ", "Mu": "Μ",
+        "Nu": "Ν", "Xi": "Ξ", "Omicron": "Ο", "Pi": "Π",
+        "Rho": "Ρ", "Sigma": "Σ", "Tau": "Τ", "Upsilon": "Υ",
+        "Phi": "Φ", "Chi": "Χ", "Psi": "Ψ", "Omega": "Ω"
+    }
+    return letras_gregas_dict.get(placa)
+
+def definir_geografia(poligonos, fator):
+
+    geografia = networkx.DiGraph()
+
+    for coordenadas in poligonos:
+        geografia.add_node(coordenadas)
+
+    def tipo_de_poligono(c):
+        if c == (0, 0):
+            geografia.nodes[c]['tipo'] = 'pn'
+            return "pn"
+        elif 0 < c[0] < fator and c[1] % c[0] == 0:
+            geografia.nodes[c]['tipo'] = 'ipn'
+            return "ipn"
+        elif 0 < c[0] < fator and c[1] % c[0] != 0:
+            geografia.nodes[c]['tipo'] = 'cpn'
+            return "cpn"
+        elif c[0] == fator and c[1] % c[0] == 0:
+            geografia.nodes[c]['tipo'] = 'ntn'
+            return "ntn"
+        elif c[0] == fator and c[1] % c[0] != 0:
+            geografia.nodes[c]['tipo'] = 'itn'
+            return "itn"
+        elif fator < c[0] < fator * 2:
+            geografia.nodes[c]['tipo'] = 'e'
+            return "e"
+        elif c[0] == fator * 2 and c[1] % fator != 0:
+            geografia.nodes[c]['tipo'] = 'its'
+            return "its"
+        elif c[0] == fator * 2 and c[1] % fator == 0:
+            geografia.nodes[c]['tipo'] = 'nts'
+            return "nts"
+        elif fator * 2 < c[0] < fator * 3 and c[1] % (fator * 3 - c[0]) != 0:
+            geografia.nodes[c]['tipo'] = 'cps'
+            return "cps"
+        elif fator * 2 < c[0] < fator * 3 and c[1] % (fator * 3 - c[0]) == 0:
+            geografia.nodes[c]['tipo'] = 'ips'
+            return "ips"
+        elif c[0] == fator * 3:
+            geografia.nodes[c]['tipo'] = 'ps'
+            return "ps"
+
+    for n in list(geografia.nodes):
+        no = tipo_de_poligono(n)
+        if no == "pn":
+            for y in range(5):
+                geografia.add_edge(n, (1, y), direcao=f'S{y+1}')
+            continue
+        if no == "ps":
+            for y in range(5):
+                geografia.add_edge(n, (fator * 3 - 1, y), direcao=f'N{y+1}')
+            continue
+        x = n[1] // n[0]
+        y = n[1] // (fator * 3 - n[0])
+        if no == "ipn":
+            if n[1] != n[0] * 5 - 1:
+                geografia.add_edge(n, (n[0] + 1, n[1] + x), direcao='S')
+                geografia.add_edge(n, (n[0] + 1, n[1] + x + 1), direcao='SE')
+                geografia.add_edge(n, (n[0], n[1] + 1), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x), direcao='N')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W') if n[1] != 0 else geografia.add_edge(n, (n[0], n[0] * 5 - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] + x - 1), direcao='SW') if n[1] != 0 else \
+                                        geografia.add_edge(n, (n[0] + 1, (n[0] + 1) * 5 - 1), direcao='SW')
+            else:
+                geografia.add_edge(n, (n[0] + 1, n[1] + x), direcao='S')
+                geografia.add_edge(n, (n[0] + 1, n[1] + x + 1), direcao='SE')
+                geografia.add_edge(n, (n[0], 0), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x), direcao='N')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] + x - 1), direcao='SW')
+        elif no == "cpn":
+            if n[1] != n[0] * 5 - 1:
+                geografia.add_edge(n, (n[0] + 1, n[1] + x + 1), direcao='SE')
+                geografia.add_edge(n, (n[0], n[1] + 1), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] + x), direcao='SW')
+            else:
+                geografia.add_edge(n, (n[0] + 1, n[1] + x + 1), direcao='SE')
+                geografia.add_edge(n, (n[0], 0), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, 0), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] + x), direcao='SW')
+        elif no == "ntn":
+            geografia.add_edge(n, (n[0] + 1, n[1]), direcao='SW')
+            geografia.add_edge(n, (n[0] + 1, n[1] + 1), direcao='SE')
+            geografia.add_edge(n, (n[0], n[1] + 1), direcao='NE')
+            geografia.add_edge(n, (n[0] - 1, n[1] - x), direcao='N')
+            geografia.add_edge(n, (n[0], n[1] - 1), direcao='NW') if n[1] != 0 else geografia.add_edge(n, (n[0], n[0] * 5 - 1), direcao='NW')
+        elif no == "itn":
+            if n[1] != fator * 5 - 1:
+                geografia.add_edge(n, (n[0] + 1, n[1]), direcao='SW')
+                geografia.add_edge(n, (n[0] + 1, n[1] + 1), direcao='NE')
+                geografia.add_edge(n, (n[0], n[1] + 1), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+            else:
+                geografia.add_edge(n, (n[0] + 1, n[1]), direcao='SW')
+                geografia.add_edge(n, (n[0] + 1, 0), direcao='NE')
+                geografia.add_edge(n, (n[0], 0), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, 0), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - x - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+        elif no == "e":
+            if n[1] != fator * 5 - 1:
+                geografia.add_edge(n, (n[0] + 1, n[1]), direcao='SW')
+                geografia.add_edge(n, (n[0] + 1, n[1] + 1), direcao='SE')
+                geografia.add_edge(n, (n[0], n[1] + 1), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1]), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - 1), direcao='NW') if n[1] != 0 else geografia.add_edge(n, (n[0] - 1, fator * 5 - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W') if n[1] != 0 else geografia.add_edge(n, (n[0], fator * 5 - 1), direcao='W')
+            else:
+                geografia.add_edge(n, (n[0] + 1, n[1]), direcao='SW')
+                geografia.add_edge(n, (n[0] + 1, 0), direcao='SE')
+                geografia.add_edge(n, (n[0], 0), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1]), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+        elif no == "its":
+            if n[1] != fator * 5 - 1:
+                geografia.add_edge(n, (n[0] + 1, n[1] - y), direcao='SE')
+                geografia.add_edge(n, (n[0], n[1] + 1), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1]), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] - y - 1), direcao='SW')
+            else:
+                geografia.add_edge(n, (n[0] + 1, 0), direcao='SE')
+                geografia.add_edge(n, (n[0], 0), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1]), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] - y - 1), direcao='SW')
+        elif no == "nts":
+            geografia.add_edge(n, (n[0] + 1, n[1] - y), direcao='S')
+            geografia.add_edge(n, (n[0], n[1] + 1), direcao='SE')
+            geografia.add_edge(n, (n[0] - 1, n[1]), direcao='NE')
+            geografia.add_edge(n, (n[0] - 1, n[1] - 1), direcao='NW') if n[1] != 0 else geografia.add_edge(n, (n[0] - 1, fator * 5 - 1), direcao='NW')
+            geografia.add_edge(n, (n[0], n[1] - 1), direcao='SW') if n[1] != 0 else geografia.add_edge(n, (n[0], fator * 5 - 1), direcao='SW')
+        elif no == "cps":
+            if n[1] != (fator * 3 - n[0]) * 5 - 1:
+                geografia.add_edge(n, (n[0] + 1, n[1] - y), direcao='SE')
+                geografia.add_edge(n, (n[0], n[1] + 1), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y + 1), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] - y - 1), direcao='SW')
+            else:
+                geografia.add_edge(n, (n[0] + 1, 0), direcao='SE')
+                geografia.add_edge(n, (n[0], 0), direcao='E')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y + 1), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='W')
+                geografia.add_edge(n, (n[0] + 1, n[1] - y - 1), direcao='SW')
+        elif no == "ips":
+            if n[1] != (fator * 3 - n[0]) * 5 - 1:
+                geografia.add_edge(n, (n[0] + 1, n[1] - y), direcao='S')
+                geografia.add_edge(n, (n[0], n[1] + 1), direcao='SE')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y + 1), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y), direcao='N')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y - 1), direcao='NW') if n[1] != 0 else \
+                                        geografia.add_edge(n, (n[0] - 1, (fator * 3 - n[0] + 1) * 5 - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='SW') if n[1] != 0 else \
+                                        geografia.add_edge(n, (n[0], (fator * 3 - n[0]) * 5 - 1), direcao='SW')
+            else:
+                geografia.add_edge(n, (n[0] + 1, n[1] - y), direcao='S')
+                geografia.add_edge(n, (n[0], 0), direcao='SE')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y + 1), direcao='NE')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y), direcao='N')
+                geografia.add_edge(n, (n[0] - 1, n[1] + y - 1), direcao='NW')
+                geografia.add_edge(n, (n[0], n[1] - 1), direcao='SW')
+
+    areas = list(poligonos.keys())
+    areas_sem_definicao = {}
+    areas_definidas = {}
+    referencias_relevo = random.sample(areas, fator * 20)
+
+    for area in areas:
+        areas_sem_definicao[area] = []
+        areas_definidas[area] = []
+
+    for n in range(fator * 3 // 2):
+        if not areas_sem_definicao:
+            break
+        for node in referencias_relevo:
+            altitude = random.randint(0, 12)
+            areas_definidas[node].append(altitude)
+            if node in areas_sem_definicao:
+                del areas_sem_definicao[node]
+            distancias = networkx.single_source_shortest_path_length(geografia, node)
+            nos_a_n_arestas = [node for node, distance in distancias.items() if distance == n + 1]
+            for neighbor in nos_a_n_arestas:
+                if neighbor in areas_sem_definicao and neighbor not in referencias_relevo:
+                    areas_sem_definicao[neighbor].append(altitude)
+        for chave in list(areas_sem_definicao.keys()):
+            if areas_sem_definicao[chave]:
+                areas_definidas[chave].append(round(mean(areas_sem_definicao[chave]), 3))
+                del areas_sem_definicao[chave]
+
+    chaves = list(areas_definidas.keys())
+    random.shuffle(chaves)
+    chaves_ordenadas = sorted(chaves, key=lambda chave: areas_definidas[chave])
+    percentual_terra = random.randint(35, 45)
+    limite_abissal = (100 - percentual_terra) // 2
+    limite_barreira = limite_abissal + (100 - percentual_terra) // 3
+    nivel_do_mar = 100 - percentual_terra
+    limite_planicie = nivel_do_mar + (100 - nivel_do_mar) * 4 // 6
+    limite_planalto = limite_planicie + (100 - limite_planicie) // 2
+
+    for i, chave in enumerate(chaves_ordenadas):
+        if i <= len(chaves_ordenadas) * limite_abissal // 100:
+            geografia.nodes[chave]['altitude'] = 'abissal'
+        elif i <= len(chaves_ordenadas) * limite_barreira // 100:
+            geografia.nodes[chave]['altitude'] = 'barreira'
+        elif i <= len(chaves_ordenadas) * nivel_do_mar // 100:
+            geografia.nodes[chave]['altitude'] = 'plataforma'
+        elif i <= len(chaves_ordenadas) * limite_planicie // 100:
+            geografia.nodes[chave]['altitude'] = 'planicie'
+        elif i <= len(chaves_ordenadas) * limite_planalto // 100:
+            geografia.nodes[chave]['altitude'] = 'planalto'
+        else:
+            geografia.nodes[chave]['altitude'] = 'cordilheira'
+
+    areas_sem_definicao = {}
+    areas_definidas = {}
+    referencias_umidade = random.sample(areas, 60)
+
+    for area in areas:
+        areas_sem_definicao[area] = []
+        areas_definidas[area] = []
+
+    for n in range(fator * 3 // 2):
+        if not areas_sem_definicao:
+            break
+        for node in referencias_umidade:
+            altitude = random.randint(0, 12)
+            areas_definidas[node].append(altitude)
+            if node in areas_sem_definicao:
+                del areas_sem_definicao[node]
+            distancias = networkx.single_source_shortest_path_length(geografia, node)
+            nos_a_n_arestas = [node for node, distance in distancias.items() if distance == n + 1]
+            for neighbor in nos_a_n_arestas:
+                if neighbor in areas_sem_definicao and neighbor not in referencias_umidade:
+                    areas_sem_definicao[neighbor].append(altitude)
+        for chave in list(areas_sem_definicao.keys()):
+            if areas_sem_definicao[chave]:
+                areas_definidas[chave].append(round(mean(areas_sem_definicao[chave]), 3))
+                del areas_sem_definicao[chave]
+
+    chaves = list(areas_definidas.keys())
+    random.shuffle(chaves)
+    chaves_ordenadas = sorted(chaves, key=lambda chave: areas_definidas[chave])
+
+    for i, chave in enumerate(chaves_ordenadas):
+        if i <= len(chaves_ordenadas) * 25 // 100:
+            geografia.nodes[chave]['umidade'] = 'arido'
+        elif i <= len(chaves_ordenadas) * 50 // 100:
+            geografia.nodes[chave]['umidade'] = 'semi-arido'
+        elif i <= len(chaves_ordenadas) * 75 // 100:
+            geografia.nodes[chave]['umidade'] = 'fertil'
+        else:
+            geografia.nodes[chave]['umidade'] = 'umido'
+
+    # Definição das placas com dois pontos de referência cada
+    placas = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta',
+            'Eta', 'Theta', 'Iota', 'Kappa', 'Lambda', 'Mu',
+            'Nu', 'Xi', 'Omicron', 'Pi', 'Rho', 'Sigma',
+            'Tau', 'Upsilon', 'Phi', 'Chi', 'Psi', 'Omega']
+    
+    # Gerar duas referências para cada placa (total 48)
+    placas_duplicadas = placas * 2
+    random.shuffle(placas_duplicadas)
+    referencias_geologia = random.sample(areas, 48)
+
+    # Atribuir cada referência a uma placa
+    areas_definidas = {area: None for area in areas}
+    for i, node in enumerate(referencias_geologia):
+        areas_definidas[node] = placas_duplicadas[i]
+
+    # Calcular a placa para cada nó baseado na proximidade
+    for node in areas_definidas:
+        if areas_definidas[node] is not None:
+            continue  # Pula pontos de referência já definidos
+        
+        # Encontrar todas as distâncias para pontos de referência
+        distancias = []
+        for ref in referencias_geologia:
+            try:
+                dist = networkx.shortest_path_length(geografia, ref, node)
+                distancias.append( (ref, dist) )
+            except networkx.exception.NetworkXNoPath:
+                continue
+        
+        if not distancias:
+            areas_definidas[node] = random.choice(placas)
+            continue
+        
+        # Encontrar a distância mínima
+        min_dist = min(d[1] for d in distancias)
+        candidatos = [d[0] for d in distancias if d[1] == min_dist]
+        
+        # Escolher aleatoriamente entre candidatos equidistantes
+        ref_escolhida = random.choice(candidatos)
+        areas_definidas[node] = areas_definidas[ref_escolhida]
+    
+    coeficiente_movimento = 300
+
+    # Gerar cores para as placas
+    cores_placas = []
+    for _ in range(24):
+        while True:
+            r = random.randint(0, 255)
+            g = random.randint(0, 255)
+            b = random.randint(0, 255)
+            if (r + g + b) > 127.5:
+                cores_placas.append((r, g, b))
+                break
+
+    latitude_equador = fator * 3 / 2
+
+    for chave, valor in areas_definidas.items():
+        geografia.nodes[chave]['placa'] = valor
+        geografia.nodes[chave]['cor_placa'] = cores_placas[placas.index(valor)]
+        geografia.nodes[chave]['letra_grega'] = letra_grega(geografia.nodes[chave]['placa'])
+        if chave[0] < latitude_equador:
+            distancia_para_equador = latitude_equador - chave[0]
+            angulo = distancia_para_equador * 90 / latitude_equador
+            incidencia_solar = math.cos(math.radians(angulo))
+        elif chave[0] == latitude_equador:
+            distancia_para_equador = 0
+            angulo = distancia_para_equador * 90 / latitude_equador
+            incidencia_solar = math.cos(math.radians(angulo))
+        else:
+            distancia_para_equador = chave[0] - latitude_equador
+            angulo = distancia_para_equador * 90 / latitude_equador
+            incidencia_solar = math.cos(math.radians(angulo))
+        if geografia.nodes[chave]['altitude'] == 'abissal' \
+        or geografia.nodes[chave]['altitude'] == 'barreira' \
+        or geografia.nodes[chave]['altitude'] == 'plataforma':
+            fator_altitude = 3
+        elif geografia.nodes[chave]['altitude'] == 'planicie':
+            fator_altitude = 1
+        elif geografia.nodes[chave]['altitude'] == 'planalto':
+            fator_altitude = -1
+        elif geografia.nodes[chave]['altitude'] == 'cordilheira':
+            fator_altitude = -3
+        if geografia.nodes[chave]['umidade'] == 'umido':
+            fator_umidade = 1.5
+        elif geografia.nodes[chave]['umidade'] == 'fertil':
+            fator_umidade = 0.5
+        elif geografia.nodes[chave]['umidade'] == 'semi-arido':
+            fator_umidade = -0.5
+        elif geografia.nodes[chave]['umidade'] == 'arido':
+            fator_umidade = -1.5
+        geografia.nodes[chave]['temperatura'] = round(40 * incidencia_solar - 8 + fator_altitude + fator_umidade, 1) - 4
+
+    for node, atributos in geografia.nodes(data = True):
+        temperatura = atributos.get('temperatura')
+        altitude = atributos.get('altitude')
+        umidade = atributos.get('umidade')
+        if temperatura < 0:
+            geografia.nodes[node]['bioma'] = 'polo'
+            geografia.nodes[node]['cust_mob'] = 8 * coeficiente_movimento
+            geografia.nodes[node]['prod_agric'] = 0
+        else:
+            if altitude == 'cordilheira':
+                geografia.nodes[node]['bioma'] = 'montanha'
+                geografia.nodes[node]['cust_mob'] = 4 * coeficiente_movimento
+                geografia.nodes[node]['prod_agric'] = 1 / 2
+            elif altitude == 'planalto':
+                    geografia.nodes[node]['bioma'] = 'estepe'
+                    geografia.nodes[node]['cust_mob'] = 2 * coeficiente_movimento
+                    geografia.nodes[node]['prod_agric'] = 2
+            elif altitude == 'planicie':
+                if umidade == 'umido':
+                    geografia.nodes[node]['bioma'] = 'floresta'
+                    geografia.nodes[node]['cust_mob'] = 1.5 * coeficiente_movimento
+                    geografia.nodes[node]['prod_agric'] = 3
+                elif umidade == 'fertil':
+                    geografia.nodes[node]['bioma'] = 'prado'
+                    geografia.nodes[node]['cust_mob'] = 1 * coeficiente_movimento
+                    geografia.nodes[node]['prod_agric'] = 4
+                elif umidade == 'semi-arido':
+                    geografia.nodes[node]['bioma'] = 'savana'
+                    geografia.nodes[node]['cust_mob'] = 1 * coeficiente_movimento
+                    geografia.nodes[node]['prod_agric'] = 1
+                else:
+                    geografia.nodes[node]['bioma'] = 'deserto'
+                    geografia.nodes[node]['cust_mob'] = 1.5 * coeficiente_movimento
+                    geografia.nodes[node]['prod_agric'] = 1 / 3
+            elif altitude == 'plataforma':
+                geografia.nodes[node]['bioma'] = 'costa'
+                geografia.nodes[node]['cust_mob'] = 0.3 * coeficiente_movimento
+                geografia.nodes[node]['prod_agric'] = 0
+            elif altitude == 'barreira':
+                geografia.nodes[node]['bioma'] = 'mar'
+                geografia.nodes[node]['cust_mob'] = 0.25 * coeficiente_movimento
+                geografia.nodes[node]['prod_agric'] = 0
+            else:
+                geografia.nodes[node]['bioma'] = 'oceano'
+                geografia.nodes[node]['cust_mob'] = 0.2 * coeficiente_movimento
+                geografia.nodes[node]['prod_agric'] = 0
+
+    for u, v, data in geografia.edges(data = True):
+        mob_u = geografia.nodes[u]['cust_mob']
+        mob_v = geografia.nodes[v]['cust_mob']
+        if geografia.nodes[u]['bioma'] in ['costa', 'mar', 'oceano'] != (geografia.nodes[v]['bioma'] in ['costa', 'mar', 'oceano']):
+            geografia[u][v]['cust_mob'] = (mob_u + mob_v) / 2 + coeficiente_movimento / 2
+        else:
+            geografia[u][v]['cust_mob'] = (mob_u + mob_v) / 2
+
+    cores_biomas = {
+        'oceano': (0, 23, 98), 'mar': (8, 33, 113), 'costa': (12, 71, 108), 'prado': (91, 174, 70), 'savana': (231, 190, 141),
+        'floresta': (75, 129, 66), 'deserto': (242, 242, 166), 'estepe': (201, 147, 121), 'montanha': (158, 86, 86), 'polo': (245, 255, 245)
+    }
+
+    prados = []
+
+    for node in geografia.nodes:
+        geografia.nodes[node]['cor_bioma'] = cores_biomas[geografia.nodes[node]['bioma']]
+        if geografia.nodes[node]['bioma'] == 'prado':
+            prados.append(node)
+
+    # Grava o grafo em um arquivo JSON
+    with open("geografia.json", "w") as arquivo:
+        json.dump(networkx.node_link_data(geografia), arquivo)
+    
+    return geografia, len(prados) // 2
+
+
+Conteúdo do arquivo poligonos.py:
+# utils/polygons.py
+
+import math
+import numpy
+
+def dicionario_poligonos(fator):
+
+    def icosaedro():
+        
+        def triangulo_original():
+            
+            def primeira_definicao_pontos():
+                lista_pontos = []
+                for x in range(fator ** 2):
+                    if x % 2 == 0:
+                        coord_x = x / 2 + 0.5
+                        coord_y = math.sin(math.pi / 6)
+                    else:
+                        coord_x = x / 2 + 0.5
+                        coord_y = math.sqrt(3) / 3
+                    lista_pontos.append((round(coord_x, 15), round(coord_y, 15)))
+                return lista_pontos
+            
+            def ponto_por_linha():
+                lista_pontos = [0]
+                ppf = fator * 2 - 1
+                una = fator * 2 - 1
+                while una != 1:
+                    lista_pontos.append(ppf)
+                    ppf += una - 2
+                    una -= 2
+                return lista_pontos
+
+            def processar_coordenadas(coordenadas, indices):
+                r = math.sqrt(3) / 3
+                h = math.sqrt(0.75) * fator
+                coords = []
+                for i in range(len(indices)):
+                    if i == len(indices) - 1:
+                        segmento = [coordenadas[-1]]
+                    else:
+                        inicio, fim = indices[i], indices[i + 1]
+                        segmento = coordenadas[inicio:fim]
+                    for x in range(len(segmento)):
+                        coefy = math.sin(math.pi / 6) * r
+                        cx = (0.5 * i + 0.5 * x) + 0.5 - fator / 2
+                        if x % 2 == 0:
+                            cy = 0 + math.sqrt(0.75) * i + coefy - h / 2
+                        else:
+                            cy = r - coefy + math.sqrt(0.75) * i + coefy - h / 2
+                        coords.append((cx, cy))
+                return coords
+            return processar_coordenadas(primeira_definicao_pontos(), ponto_por_linha())
+
+        to = triangulo_original()
+
+        def triangulos_equatoriais_em_pe():
+            raio = fator / (2 * math.sin(math.pi / 5))
+            apotema = fator / (2 * math.tan(math.pi / 5))
+            theta = math.asin((raio - apotema) / fator)
+            h = fator * math.sqrt(0.75)
+            t1 = [(x, math.cos(theta) * y, math.sin(theta) * y) for x, y in to]
+            t1 = [(x, y, z + apotema + math.sin(theta) * h / 2) for x, y, z in t1]
+            return t1
+
+        t1 = triangulos_equatoriais_em_pe()
+
+        def rotacionar_em_torno_do_eixo_y(coordenadas, angulo_graus):
+            angulo_radianos = math.radians(angulo_graus)
+            cos_theta = math.cos(angulo_radianos)
+            sin_theta = math.sin(angulo_radianos)
+            coordenadas_rotacionadas = []
+            for x, y, z in coordenadas:
+                x_novo = cos_theta * x + sin_theta * z
+                y_novo = y
+                z_novo = -sin_theta * x + cos_theta * z
+                coordenadas_rotacionadas.append((x_novo, y_novo, z_novo))
+            return coordenadas_rotacionadas
+
+        t2 = rotacionar_em_torno_do_eixo_y(t1, 72)
+        t3 = rotacionar_em_torno_do_eixo_y(t1, 144)
+        t4 = rotacionar_em_torno_do_eixo_y(t1, 216)
+        t5 = rotacionar_em_torno_do_eixo_y(t1, 288)
+
+        def triangulos_equatoriais_invertidos():
+            raio = fator / (2 * math.sin(math.pi / 5))
+            apotema = fator / (2 * math.tan(math.pi / 5))
+            theta = math.asin((raio - apotema) / fator)
+            h = fator * math.sqrt(0.75)
+            t6 = [(x, -y) for x, y in to]
+            t6 = [(x, math.cos(theta) * y, math.sin(theta) * -y) for x, y in t6]
+            t6 = [(x, y, z + apotema + math.sin(theta) * h / 2) for x, y, z in t6]
+            return t6
+
+        tr = triangulos_equatoriais_invertidos()
+        t6 = rotacionar_em_torno_do_eixo_y(tr, 36)
+        t7 = rotacionar_em_torno_do_eixo_y(tr, 108)
+        t8 = rotacionar_em_torno_do_eixo_y(tr, 180)
+        t9 = rotacionar_em_torno_do_eixo_y(tr, 252)
+        t10 = rotacionar_em_torno_do_eixo_y(tr, 324)
+
+        def triangulos_polares_norte():
+            alpha = math.acos(1 / (2 * math.tan(math.pi / 5) * math.sqrt(0.75)))
+            apotema = fator / (2 * math.tan(math.pi / 5))
+            h = fator * math.sqrt(0.75)
+            deslocamento = apotema - math.cos(alpha) * h / 2
+            raio = fator / (2 * math.sin(math.pi / 5))
+            theta = math.asin((raio - apotema) / fator)
+            deslocamento_vertical = (math.cos(theta) * h / 2) + (math.sin(alpha) * h / 2)
+            tr = [(x, 0, -y) for x, y in to]
+            tr = [(x, math.sin(alpha) * -z + deslocamento_vertical,
+                z * math.cos(alpha) + deslocamento) for x, y, z in tr]
+            return tr
+
+        tr = triangulos_polares_norte()
+
+        t11 = rotacionar_em_torno_do_eixo_y(tr, 36)
+        t12 = rotacionar_em_torno_do_eixo_y(tr, 108)
+        t13 = rotacionar_em_torno_do_eixo_y(tr, 180)
+        t14 = rotacionar_em_torno_do_eixo_y(tr, 252)
+        t15 = rotacionar_em_torno_do_eixo_y(tr, 324)
+
+        def triangulos_polares_sul():
+            alpha = math.acos(1 / (2 * math.tan(math.pi / 5) * math.sqrt(0.75)))
+            apotema = fator / (2 * math.tan(math.pi / 5))
+            h = fator * math.sqrt(0.75)
+            deslocamento = apotema - math.cos(alpha) * h / 2
+            raio = fator / (2 * math.sin(math.pi / 5))
+            theta = math.asin((raio - apotema) / fator)
+            deslocamento_vertical = (math.cos(theta) * h / 2) + (math.sin(alpha) * h / 2)
+            t16 = [(x, 0, -y) for x, y in to]
+            t16 = [(x, math.sin(alpha) * z - deslocamento_vertical,
+                    z * math.cos(alpha) + deslocamento) for x, y, z in t16]
+            return t16
+
+        t16 = triangulos_polares_sul()
+        t17 = rotacionar_em_torno_do_eixo_y(t16, 72)
+        t18 = rotacionar_em_torno_do_eixo_y(t16, 144)
+        t19 = rotacionar_em_torno_do_eixo_y(t16, 216)
+        t20 = rotacionar_em_torno_do_eixo_y(t16, 288)
+        return [t1, t2, t3, t4, t5, t6, t7, t8, t9, t10, t11, t12, t13, t14, t15, t16, t17, t18, t19, t20]
+
+    def esfera(pontos, raio):
+
+        def projetar_ponto_na_esfera(ponto, raio):
+            x, y, z = ponto
+            magnitude = math.sqrt(x**2 + y**2 + z**2)
+            return (
+                raio * x / magnitude,
+                raio * y / magnitude,
+                raio * z / magnitude
+            )
+
+        return [[projetar_ponto_na_esfera(ponto, raio) for ponto in lista] for lista in pontos]
+
+    esfera = esfera(icosaedro(), fator)
+
+    def poligonos():
+        poligonos = []
+        
+        def ponto_por_linha():
+            lista_pontos = [0]
+            ppf = fator * 2 - 1
+            una = fator * 2 - 1
+            while una != 1:
+                lista_pontos.append(ppf)
+                ppf += una - 2
+                una -= 2
+            return lista_pontos
+
+        p = ponto_por_linha()
+
+        def hexagonos_centrais():
+            hexagonos = []
+            for t in esfera:
+                i = 0
+                for x in range(fator - 2, 0, -1):
+                    for y in range(x):
+                        hexagonos.append(numpy.array([
+                            t[p[y] + i * 2 + 1],
+                            t[p[y] + i * 2 + 2],
+                            t[p[y] + i * 2 + 3],
+                            t[p[y + 1] + i * 2 + 2],
+                            t[p[y + 1] + i * 2 + 1],
+                            t[p[y + 1] + i * 2]
+                        ]))
+                    i += 1
+            return hexagonos
+
+        poligonos.append(hexagonos_centrais())
+
+        def hexagonos_tropicais_sul():
+            hexagonos = []
+            for x in range(5):
+                for y in range(fator - 1):
+                    hexagonos.append(numpy.array([
+                        esfera[x][y * 2],
+                        esfera[x][y * 2 + 1],
+                        esfera[x][y * 2 + 2],
+                        esfera[x + 15][y * 2 + 2],
+                        esfera[x + 15][y * 2 + 1],
+                        esfera[x + 15][y * 2]
+                    ]))
+            return hexagonos
+
+        poligonos.append(hexagonos_tropicais_sul())
+
+        def hexagonos_tropicais_norte():
+            hexagonos = []
+            for x in range(5, 10, 1):
+                for y in range(fator - 1):
+                    hexagonos.append(numpy.array([
+                        esfera[x][y * 2],
+                        esfera[x][y * 2 + 1],
+                        esfera[x][y * 2 + 2],
+                        esfera[x + 5][y * 2 + 2],
+                        esfera[x + 5][y * 2 + 1],
+                        esfera[x + 5][y * 2]
+                    ]))
+            return hexagonos
+
+        poligonos.append(hexagonos_tropicais_norte())
+
+        def hexagonos_equatoriais_ascendentes():
+            hexagonos = []
+            for x in range(5):
+                for y in range(fator - 1):
+                    if x == 0:
+                        hexagonos.append(numpy.array([
+                            esfera[x][p[y]],
+                            esfera[x][p[y] + 1],
+                            esfera[x][p[y + 1]],
+                            esfera[x + 9][p[fator - y - 1] - 1],
+                            esfera[x + 9][p[fator - y - 1] - 2],
+                            esfera[x + 9][p[fator - y - 1] + 2 * y]
+                        ]))
+                    else:
+                        hexagonos.append(numpy.array([
+                            esfera[x][p[y]],
+                            esfera[x][p[y] + 1],
+                            esfera[x][p[y + 1]],
+                            esfera[x + 4][p[fator - y - 1] - 1],
+                            esfera[x + 4][p[fator - y - 1] - 2],
+                            esfera[x + 4][p[fator - y - 1] + 2 * y]
+                        ]))
+            return hexagonos
+
+        poligonos.append(hexagonos_equatoriais_ascendentes())
+
+        def hexagonos_equatoriais_descendentes():
+            hexagonos = []
+            for x in range(5):
+                for y in range(fator - 1):
+                    hexagonos.append(numpy.array([
+                        esfera[x][p[fator - 1 - y] + 2 * y],
+                        esfera[x][p[fator - 1 - y] - 2],
+                        esfera[x][p[fator - 1 - y] - 1],
+                        esfera[x + 5][p[y + 1]],
+                        esfera[x + 5][p[y] + 1],
+                        esfera[x + 5][p[y]]
+                    ]))
+            return hexagonos
+
+        poligonos.append(hexagonos_equatoriais_descendentes())
+
+        def hexagonos_polares_norte():
+            hexagonos = []
+            for x in range(10, 15, 1):
+                for y in range(fator - 1):
+                    if x == 10:
+                        hexagonos.append(numpy.array([
+                            esfera[x][p[y]],
+                            esfera[x][p[y] + 1],
+                            esfera[x][p[y + 1]],
+                            esfera[x + 4][p[y + 1] + (fator - y - 2) * 2],
+                            esfera[x + 4][p[y + 1] - 2],
+                            esfera[x + 4][p[y + 1] - 1]
+                        ]))
+                    else:
+                        hexagonos.append(numpy.array([
+                            esfera[x][p[y]],
+                            esfera[x][p[y] + 1],
+                            esfera[x][p[y + 1]],
+                            esfera[x - 1][p[y + 1] + (fator - y - 2) * 2],
+                            esfera[x - 1][p[y + 1] - 2],
+                            esfera[x - 1][p[y + 1] - 1]
+                        ]))
+            return hexagonos
+
+        poligonos.append(hexagonos_polares_norte())
+
+        def hexagonos_polares_sul():
+            hexagonos = []
+            for x in range(15, 20):
+                for y in range(fator - 1):
+                    if x == 15:
+                        hexagonos.append(numpy.array([
+                            esfera[x][p[y]],
+                            esfera[x][p[y] + 1],
+                            esfera[x][p[y + 1]],
+                            esfera[x + 4][p[y + 1] + (fator - y - 2) * 2],
+                            esfera[x + 4][p[y + 1] - 2],
+                            esfera[x + 4][p[y + 1] - 1]
+                        ]))
+                    else:
+                        hexagonos.append(numpy.array([
+                            esfera[x][p[y]],
+                            esfera[x][p[y] + 1],
+                            esfera[x][p[y + 1]],
+                            esfera[x - 1][p[y + 1] + (fator - y - 2) * 2],
+                            esfera[x - 1][p[y + 1] - 2],
+                            esfera[x - 1][p[y + 1] - 1]
+                        ]))
+            return hexagonos
+
+        poligonos.append(hexagonos_polares_sul())
+
+        def pentagonos():
+
+            pentagonos = []
+
+            def pentagonos_tropicais_sul():
+                pentagonos = []
+                for x in range(5):
+                    if x == 0:
+                        pentagonos.append(numpy.array([
+                            esfera[0][0],
+                            esfera[9][p[fator - 1]],
+                            esfera[4][p[1] - 1],
+                            esfera[19][p[1] - 1],
+                            esfera[15][0]
+                        ]))
+                    else:
+                        pentagonos.append(numpy.array([
+                            esfera[x][0],
+                            esfera[x + 4][p[fator - 1]],
+                            esfera[x - 1][p[1] - 1],
+                            esfera[x + 14][p[1] - 1],
+                            esfera[x + 15][0]
+                        ]))
+                return pentagonos
+
+            pentagonos.extend(pentagonos_tropicais_sul())
+
+            def pentagonos_tropicais_norte():
+                pentagonos = []
+                for x in range(5):
+                    if x == 0:
+                        pentagonos.append(numpy.array([
+                            esfera[0][p[fator - 1]],
+                            esfera[5][0],
+                            esfera[10][0],
+                            esfera[14][p[1] - 1],
+                            esfera[9][p[1] - 1]
+                        ]))
+                    else:
+                        pentagonos.append(numpy.array([
+                            esfera[x][p[fator - 1]],
+                            esfera[x + 5][0],
+                            esfera[x + 10][0],
+                            esfera[x + 9][p[1] - 1],
+                            esfera[x + 4][p[1] - 1]
+                        ]))
+                return pentagonos
+
+            pentagonos.extend(pentagonos_tropicais_norte())
+
+            def pentagono_polo_norte():
+                return numpy.array([
+                    esfera[10][p[fator - 1]],
+                    esfera[11][p[fator - 1]],
+                    esfera[12][p[fator - 1]],
+                    esfera[13][p[fator - 1]],
+                    esfera[14][p[fator - 1]]
+                ])
+
+            pentagonos.append(pentagono_polo_norte())
+
+            def pentagono_polo_sul():
+                return numpy.array([
+                    esfera[15][p[fator - 1]],
+                    esfera[16][p[fator - 1]],
+                    esfera[17][p[fator - 1]],
+                    esfera[18][p[fator - 1]],
+                    esfera[19][p[fator - 1]]
+                ])
+
+            pentagonos.append(pentagono_polo_sul())
+            
+            return pentagonos
+
+        poligonos.append(pentagonos())
+
+        return poligonos
+
+    poligonos = poligonos()
+
+    def dic_pol():
+        coord_vert = {}
+        h = 0
+        for x in range(5):        
+            for i, z in enumerate(range(fator - 2, 0, -1)):
+                n = fator * 2 - 1
+                for a in range(z):
+                    coord_vert[(n - a, fator * x + i + 1)] = poligonos[0][h]
+                    h += 1
+
+        for x in range(5):
+            for i, z in enumerate(range(fator - 2, 0, -1)):
+                n = fator + 1
+                for a in range(z):
+                    coord_vert[(n + a, fator * x + 2 + i + a)] = poligonos[0][h]
+                    h += 1
+
+        for x in range(5):
+            for i, z in enumerate(range(fator - 2, 0, -1)):
+                n = fator - 1
+                for a in range(z):
+                    coord_vert[(n - a, fator * x + 1 - x * (a + 1) + i)] = poligonos[0][h]
+                    h += 1
+
+        for x in range(5):
+            b = fator * x + 1 - x
+            for i, z in enumerate(range(fator - 2, 0, -1)):
+                n = fator * 2 + 1
+                for a in range(z):
+                    coord_vert[(n + a, b + i - a * x)] = poligonos[0][h]
+                    h += 1
+        h = 0
+        for x in range(5):
+            for z in range(fator - 1):
+                coord_vert[(fator * 2, fator * x + z + 1)] = poligonos[1][h]
+                h += 1
+        h = 0
+        for x in range(5):
+            for z in range(fator - 1):
+                coord_vert[(fator, fator * x + z + 1)] = poligonos[2][h]
+                h += 1
+        h = 0
+        for x in range(5):
+            for z in range(fator - 1):
+                coord_vert[(fator * 2 - z - 1, fator * x)] = poligonos[3][h]
+                h += 1
+        h = 0
+        for x in range(5):
+            for z in range(fator - 1):
+                coord_vert[(fator + z + 1, fator * x + z + 1)] = poligonos[4][h]
+                h += 1
+        h = 0
+        for x in range(5):
+            for z in range(fator - 1):
+                coord_vert[(fator - z - 1, (fator - z - 1) * x)] = poligonos[5][h]
+                h += 1
+        h = 0
+        for x in range(5):
+            for i, z in enumerate(range(fator - 1, 0, -1)):
+                coord_vert[(fator * 2 + i + 1, z * x)] = poligonos[6][h]
+                h += 1
+        h = 0
+        for x in range(5):
+            coord_vert[(fator * 2, fator * x)] = poligonos[7][h]
+            h += 1
+        for x in range(5):
+            coord_vert[(fator, fator * x)] = poligonos[7][h]
+            h += 1
+        coord_vert[(0, 0)] = poligonos[7][h]
+        h += 1
+        coord_vert[(fator * 3, 0)] = poligonos[7][h]
+
+        return coord_vert
+    
+    return dic_pol()
+
+Conteúdo do arquivo requirements.txt:
+glfw==2.9.0
+networkx==3.4.2
+numpy==2.2.6
+pyglm==2.8.2
+PyOpenGL==3.1.9
+PyOpenGL-accelerate==3.1.9
+
+
