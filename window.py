@@ -5,6 +5,7 @@ from OpenGL.GL import *
 import sys
 from rendering.renderer import Renderer
 from camera import Camera
+import moderngl as mgl
 
 class Window:
     def __init__(self, title, contexto):
@@ -17,7 +18,7 @@ class Window:
         # Inicializa a câmera aqui, usando o fator do contexto
         self.camera = Camera(
             fator=contexto.fator,
-            position=[0, 0, 10],
+            position=[0, 0, 1],
             target=[0, 0, 0],
             aspect_ratio=16/9  # Valor padrão (será atualizado após criar a janela)
         )
@@ -56,6 +57,10 @@ class Window:
         else:
             print(f"Erro ao ler pixel: dado inválido retornado {data}")
             return None
+        
+        # Adiciona condição para ignorar pixels pretos (fora do planeta)
+        if r < 0.01 and g < 0.01 and b < 0.01:
+            return None
 
         id = int(r * 255) + int(g * 255) * 256 + int(b * 255) * 256 * 256
         nodes = list(self.contexto.geografia.nodes.keys())
@@ -67,16 +72,7 @@ class Window:
         return nodes[id]
         
     def show_province_menu(self, key):
-        node_data = self.contexto.geografia.nodes[key]
-        print("=== Província Selecionada ===")
-        print(f"Coordenadas: {key}")
-        print(f"Bioma: {node_data.get('bioma', 'N/A')}")
-        print(f"Temperatura: {node_data.get('temperatura', 'N/A')}°C")
-        print(f"Altitude: {node_data.get('altitude', 'N/A')}")
-        print(f"Umidade: {node_data.get('umidade', 'N/A')}")
-        print(f"Placa Tectônica: {node_data.get('placa', 'N/A')}")
-        print(f"Letra Grega: {node_data.get('letra_grega', 'N/A')}")
-        print("==============================")
+        self.contexto.selected_province = key
 
     def init_glfw(self):
         if not glfw.init():
@@ -85,17 +81,6 @@ class Window:
 
         monitor = glfw.get_primary_monitor()
         video_mode = glfw.get_video_mode(monitor)
-        """
-        red_bits = video_mode.bits.red
-        green_bits = video_mode.bits.green
-        blue_bits = video_mode.bits.blue
-        refresh_rate = video_mode.refresh_rate
-
-        glfw.window_hint(glfw.RED_BITS, red_bits)
-        glfw.window_hint(glfw.GREEN_BITS, green_bits)
-        glfw.window_hint(glfw.BLUE_BITS, blue_bits)
-        glfw.window_hint(glfw.REFRESH_RATE, refresh_rate)
-        """
         self.window = glfw.create_window(video_mode.size.width, video_mode.size.height, self.title, monitor, None)
 
         if not self.window:
@@ -104,6 +89,9 @@ class Window:
             return False
 
         glfw.make_context_current(self.window)
+
+        self.ctx_mgl = mgl.create_context()
+        self.contexto.ctx_mgl = self.ctx_mgl
         
         # Atualiza o aspect ratio da câmera com o tamanho real da janela
         self.width, self.height = glfw.get_framebuffer_size(self.window)
@@ -171,6 +159,9 @@ class Window:
 
             # Renderiza os polígonos via Renderer
             self.renderer.render()
+
+            # Renderização do HUD com moderngl
+            self.renderer.render_hud()
 
             glfw.swap_buffers(self.window)
             glfw.poll_events()

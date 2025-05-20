@@ -15,6 +15,7 @@ arquivos_especificos = [
     "shaders/picking_vs.glsl",
     "shaders/render_fs.glsl",
     "shaders/render_vs.glsl",
+    "utils/font_renderer.py",
     "utils/geografia.py",
     "utils/poligonos.py",
     "requirements.txt"

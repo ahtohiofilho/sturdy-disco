@@ -1,6 +1,7 @@
 # shader.py
 import OpenGL.GL as gl
-import ctypes
+from OpenGL.GL import *
+import glm
 
 class Shader:
     def __init__(self, vertex_source=None, fragment_source=None):
@@ -94,3 +95,15 @@ class Shader:
         loc = self.get_uniform_location(name)
         if loc != -1:
             gl.glUniform1i(loc, value)
+
+    def set_uniform(self, name, value):
+        loc = glGetUniformLocation(self.program, name)
+        if loc == -1:
+            return
+        
+        if isinstance(value, (int, bool)):  # Corrigido
+            glUniform1i(loc, value)
+        elif isinstance(value, float):  # Corrigido (removido o tuple extra)
+            glUniform1f(loc, value)
+        elif isinstance(value, glm.mat4):  # Corrigido (removido o tuple extra)
+            glUniformMatrix4fv(loc, 1, GL_FALSE, glm.value_ptr(value))

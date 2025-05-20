@@ -5,6 +5,7 @@ from rendering.buffers import prepare_buffers
 from rendering.shader import Shader
 import glm
 import glfw
+from utils.font_renderer import FontRenderer
 
 class Renderer:
     def __init__(self, contexto):
@@ -12,10 +13,11 @@ class Renderer:
         self.vao = None
         self.vertex_count = 0
         self.polygon_types = []
-
-        # Dois shaders distintos
         self.render_shader = None
         self.picking_shader = None
+
+        self.ubuntu_font = FontRenderer("assets/fonts/ubuntu_mono_atlas.png")
+
 
         # Inicializa shaders e buffers
         self.setup()
@@ -165,3 +167,28 @@ class Renderer:
 
         glBindVertexArray(0)
         self.render_shader.unuse()
+
+    def render_hud(self):
+        # Desenha apenas se houver província selecionada
+        if hasattr(self.contexto, 'selected_province') and self.contexto.selected_province:
+            node_data = self.contexto.geografia.nodes[self.contexto.selected_province]
+            lines = [
+                f"Província: {self.contexto.selected_province}",
+                f"Bioma: {node_data.get('bioma', 'N/A')}",
+                f"Temperatura: {node_data.get('temperatura', 'N/A')}°C",
+                f"Altitude: {node_data.get('altitude', 'N/A')}",
+                f"Umidade: {node_data.get('umidade', 'N/A')}"
+            ]
+
+            # Garante que estamos usando a projeção ortográfica
+            self.ubuntu_font.prepare_ortho()
+
+            # Posição inicial do texto
+            x, y = 20, 20
+
+            # Escala padrão
+            scale = 0.5
+
+            # Desenha linha por linha
+            for i, line in enumerate(lines):
+                self.ubuntu_font.draw_text(x, y + i * 25, line, scale)

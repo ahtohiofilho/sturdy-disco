@@ -80,7 +80,6 @@ if __name__ == "__main__":
     contexto.window.run()
 
 
-
 Conteúdo do arquivo window.py:
 # window.py
 
@@ -89,6 +88,7 @@ from OpenGL.GL import *
 import sys
 from rendering.renderer import Renderer
 from camera import Camera
+import moderngl as mgl
 
 class Window:
     def __init__(self, title, contexto):
@@ -101,7 +101,7 @@ class Window:
         # Inicializa a câmera aqui, usando o fator do contexto
         self.camera = Camera(
             fator=contexto.fator,
-            position=[0, 0, 10],
+            position=[0, 0, 1],
             target=[0, 0, 0],
             aspect_ratio=16/9  # Valor padrão (será atualizado após criar a janela)
         )
@@ -140,6 +140,10 @@ class Window:
         else:
             print(f"Erro ao ler pixel: dado inválido retornado {data}")
             return None
+        
+        # Adiciona condição para ignorar pixels pretos (fora do planeta)
+        if r < 0.01 and g < 0.01 and b < 0.01:
+            return None
 
         id = int(r * 255) + int(g * 255) * 256 + int(b * 255) * 256 * 256
         nodes = list(self.contexto.geografia.nodes.keys())
@@ -151,16 +155,7 @@ class Window:
         return nodes[id]
         
     def show_province_menu(self, key):
-        node_data = self.contexto.geografia.nodes[key]
-        print("=== Província Selecionada ===")
-        print(f"Coordenadas: {key}")
-        print(f"Bioma: {node_data.get('bioma', 'N/A')}")
-        print(f"Temperatura: {node_data.get('temperatura', 'N/A')}°C")
-        print(f"Altitude: {node_data.get('altitude', 'N/A')}")
-        print(f"Umidade: {node_data.get('umidade', 'N/A')}")
-        print(f"Placa Tectônica: {node_data.get('placa', 'N/A')}")
-        print(f"Letra Grega: {node_data.get('letra_grega', 'N/A')}")
-        print("==============================")
+        self.contexto.selected_province = key
 
     def init_glfw(self):
         if not glfw.init():
@@ -169,17 +164,6 @@ class Window:
 
         monitor = glfw.get_primary_monitor()
         video_mode = glfw.get_video_mode(monitor)
-        """
-        red_bits = video_mode.bits.red
-        green_bits = video_mode.bits.green
-        blue_bits = video_mode.bits.blue
-        refresh_rate = video_mode.refresh_rate
-
-        glfw.window_hint(glfw.RED_BITS, red_bits)
-        glfw.window_hint(glfw.GREEN_BITS, green_bits)
-        glfw.window_hint(glfw.BLUE_BITS, blue_bits)
-        glfw.window_hint(glfw.REFRESH_RATE, refresh_rate)
-        """
         self.window = glfw.create_window(video_mode.size.width, video_mode.size.height, self.title, monitor, None)
 
         if not self.window:
@@ -188,6 +172,9 @@ class Window:
             return False
 
         glfw.make_context_current(self.window)
+
+        self.ctx_mgl = mgl.create_context()
+        self.contexto.ctx_mgl = self.ctx_mgl
         
         # Atualiza o aspect ratio da câmera com o tamanho real da janela
         self.width, self.height = glfw.get_framebuffer_size(self.window)
@@ -256,6 +243,9 @@ class Window:
             # Renderiza os polígonos via Renderer
             self.renderer.render()
 
+            # Renderização do HUD com moderngl
+            self.renderer.render_hud()
+
             glfw.swap_buffers(self.window)
             glfw.poll_events()
 
@@ -264,10 +254,12 @@ from utils.poligonos import dicionario_poligonos
 from utils.geografia import definir_geografia
 
 class Contexto:
-    def __init__(self, fator=3):
+    def __init__(self, fator=7):
         self.fator = fator
         self.poligonos = dicionario_poligonos(fator)
         self.geografia, self.num_civ = definir_geografia(self.poligonos, fator)
+        self.ctx_mgl = None
+        self.selected_province = None
 
 Conteúdo do arquivo camera.py:
 # camera.py
@@ -277,9 +269,9 @@ import glm
 import glfw
 import math
 
-
 class Camera:
-    def __init__(self, fator, position=(0, 0, 5), target=(0, 0, 0), up=(0, 1, 0), aspect_ratio=16/9):
+    def __init__(self, fator, position=(0, 0, 5), target=(0, 0, 0), up=(0, 1, 0), 
+                 aspect_ratio=16/9):
         self.target = np.array(target, dtype=np.float32)
         self.world_up = np.array(up, dtype=np.float32)
         self.yaw = -90.0   # Olhando para +z inicialmente
@@ -287,13 +279,14 @@ class Camera:
         self.speed = 0.5
         self.sensitivity = 0.3
         self.aspect_ratio = aspect_ratio
+        self.distancia_inicial = 4
 
         # Calcula o raio do planeta com base no fator
         self.raio_planeta = fator / (2 * math.sin(math.pi / 5))
 
-        # Define posição inicial com base no raio
-        distance = 3.0 * self.raio_planeta  # 3 raios de distância
-        self.position = np.array(position if position is not None else [0, 0, distance], dtype=np.float32)
+        # Define posição inicial baseada em múltiplos do raio
+        distance = self.distancia_inicial * self.raio_planeta
+        self.position = np.array([0, 0, distance], dtype=np.float32)
 
         # Obter proporção da tela
         self.aspect_ratio = self.get_screen_aspect_ratio() or 16 / 9
@@ -337,7 +330,12 @@ class Camera:
         )
 
     def get_projection_matrix(self):
-        return glm.perspective(glm.radians(45.0), self.aspect_ratio, 0.1, 100.0 * self.raio_planeta)
+        return glm.perspective(
+            glm.radians(45.0), 
+            self.aspect_ratio, 
+            0.1, 
+            (self.distancia_inicial + 1) * self.raio_planeta * 10  # Ajuste o far plane
+        )
 
     def update(self):
         front = np.array([
@@ -424,6 +422,7 @@ from rendering.buffers import prepare_buffers
 from rendering.shader import Shader
 import glm
 import glfw
+from utils.font_renderer import FontRenderer
 
 class Renderer:
     def __init__(self, contexto):
@@ -431,10 +430,11 @@ class Renderer:
         self.vao = None
         self.vertex_count = 0
         self.polygon_types = []
-
-        # Dois shaders distintos
         self.render_shader = None
         self.picking_shader = None
+
+        self.ubuntu_font = FontRenderer("assets/fonts/ubuntu_mono_atlas.png")
+
 
         # Inicializa shaders e buffers
         self.setup()
@@ -585,6 +585,31 @@ class Renderer:
         glBindVertexArray(0)
         self.render_shader.unuse()
 
+    def render_hud(self):
+        # Desenha apenas se houver província selecionada
+        if hasattr(self.contexto, 'selected_province') and self.contexto.selected_province:
+            node_data = self.contexto.geografia.nodes[self.contexto.selected_province]
+            lines = [
+                f"Província: {self.contexto.selected_province}",
+                f"Bioma: {node_data.get('bioma', 'N/A')}",
+                f"Temperatura: {node_data.get('temperatura', 'N/A')}°C",
+                f"Altitude: {node_data.get('altitude', 'N/A')}",
+                f"Umidade: {node_data.get('umidade', 'N/A')}"
+            ]
+
+            # Garante que estamos usando a projeção ortográfica
+            self.ubuntu_font.prepare_ortho()
+
+            # Posição inicial do texto
+            x, y = 20, 20
+
+            # Escala padrão
+            scale = 0.5
+
+            # Desenha linha por linha
+            for i, line in enumerate(lines):
+                self.ubuntu_font.draw_text(x, y + i * 25, line, scale)
+
 Conteúdo do arquivo picking_fs.glsl:
 #version 330 core
 uniform vec3 picking_color;
@@ -630,6 +655,168 @@ void main() {
     gl_Position = projection * view * vec4(position, 1.0);
     fragColor = color;
 }
+
+Conteúdo do arquivo font_renderer.py:
+# utils/font_renderer.py
+import numpy as np
+from OpenGL.GL import *
+from PIL import Image
+import glm
+from rendering.shader import Shader
+import glfw
+
+class FontRenderer:
+    def __init__(self, font_texture_path, char_width=16, char_height=32):
+        self.char_width = char_width
+        self.char_height = char_height
+        self.texture_id = self._load_texture(font_texture_path)
+        self.shader = self._init_shader()  # Usa sua classe Shader
+        self.vao, self.vbo = self._init_buffers()
+        self.buffer_size = 0
+
+    def _load_texture(self, path):
+        img = Image.open(path).convert("RGBA")
+        img = img.transpose(Image.FLIP_TOP_BOTTOM)
+        self.tex_width, self.tex_height = img.size
+
+        texture_id = glGenTextures(1)
+        glBindTexture(GL_TEXTURE_2D, texture_id)
+        glTexImage2D(
+            GL_TEXTURE_2D, 0, GL_RGBA,
+            self.tex_width, self.tex_height, 0,
+            GL_RGBA, GL_UNSIGNED_BYTE, img.tobytes()
+        )
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+        return texture_id
+
+    def _init_shader(self):
+        vertex_src = """
+        #version 330 core
+        layout(location = 0) in vec2 position;
+        layout(location = 1) in vec2 texcoord;
+        out vec2 uv;
+        uniform mat4 projection;
+        void main() {
+            uv = texcoord;
+            gl_Position = projection * vec4(position, 0.0, 1.0);
+        }
+        """
+        fragment_src = """
+        #version 330 core
+        in vec2 uv;
+        out vec4 color;
+        uniform sampler2D font_atlas;
+        void main() {
+            color = texture(font_atlas, uv);
+        }
+        """
+        return Shader(vertex_src, fragment_src)  # Usa sua classe Shader!
+
+    def _init_buffers(self):
+        vao = glGenVertexArrays(1)
+        vbo = glGenBuffers(1)
+        glBindVertexArray(vao)
+        glBindBuffer(GL_ARRAY_BUFFER, vbo)
+        
+        self.buffer_size = 0
+        glBufferData(GL_ARRAY_BUFFER, self.buffer_size, None, GL_DYNAMIC_DRAW)
+        
+        # Atributos: posição (xy) + texcoord (uv)
+        glEnableVertexAttribArray(0)
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(0))
+        glEnableVertexAttribArray(1)
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(8))
+        
+        glBindVertexArray(0)
+        return vao, vbo
+    
+    def prepare_ortho(self):
+        width, height = glfw.get_framebuffer_size(glfw.get_current_context())
+        projection = glm.ortho(0, width, height, 0, -1, 1)
+        self.shader.use()
+        self.shader.set_uniform("projection", projection)
+
+    def draw_text(self, x, y, text, scale=1.0):
+        vertices = []
+        for char in text:
+            if char == ' ':  # Pula espaços
+                x += self.char_width * scale
+                continue
+
+            ascii_val = ord(char)
+
+            # Se o caractere não estiver no atlas, pule
+            if ascii_val < 32 or ascii_val > 126:
+                x += self.char_width * scale
+                continue
+
+            # Calcula posição no atlas (sempre na linha 0)
+            col = ascii_val - 32  # subtrai offset do primeiro caractere (espaço)
+
+            # Coordenadas UV
+            u0 = col * self.char_width / self.tex_width
+            v0 = 0  # primeira linha
+            u1 = u0 + self.char_width / self.tex_width
+            v1 = 1.0  # altura total da imagem
+
+            w = self.char_width * scale
+            h = self.char_height * scale
+
+            # Adiciona vértices do quad (x, y, u, v)
+            vertices.extend([
+                x,     y,     u0, v1,
+                x + w, y,     u1, v1,
+                x + w, y + h, u1, v0,
+                x,     y + h, u0, v0,
+            ])
+            x += w
+
+        if not vertices:
+            return
+        
+        # Converter para array numpy
+        vertex_data = np.array(vertices, dtype=np.float32)
+        required_size = vertex_data.nbytes  # Tamanho necessário em bytes
+
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
+
+        # Verificar se o buffer precisa ser redimensionado
+        if required_size > self.buffer_size:
+            # Realocar o buffer com o novo tamanho
+            glBufferData(GL_ARRAY_BUFFER, required_size, vertex_data, GL_DYNAMIC_DRAW)
+            self.buffer_size = required_size
+        else:
+            # Atualizar apenas os dados existentes
+            glBufferSubData(GL_ARRAY_BUFFER, 0, required_size, vertex_data)
+
+        # Upload dos vértices para o VBO
+        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
+        glBufferSubData(GL_ARRAY_BUFFER, 0, np.array(vertices, dtype=np.float32))
+
+        # Configura estado de renderização
+        glDisable(GL_DEPTH_TEST)
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+
+        # Ativa shader e textura
+        self.shader.use()
+        glActiveTexture(GL_TEXTURE0)
+        glBindTexture(GL_TEXTURE_2D, self.texture_id)
+        self.shader.set_uniform("font_atlas", 0)
+
+        # Configura projeção ortográfica
+        width, height = glfw.get_framebuffer_size(glfw.get_current_context())
+        projection = glm.ortho(0, width, height, 0, -1, 1)
+        self.shader.set_uniform("projection", projection)
+
+        # Renderiza
+        glBindVertexArray(self.vao)
+        glDrawArrays(GL_QUADS, 0, len(vertices) // 4)
+
+        # Restaura estado
+        glEnable(GL_DEPTH_TEST)
+        glDisable(GL_BLEND)
 
 Conteúdo do arquivo geografia.py:
 # utils/geography.py
@@ -1559,9 +1746,12 @@ def dicionario_poligonos(fator):
     return dic_pol()
 
 Conteúdo do arquivo requirements.txt:
+glcontext==3.0.0
 glfw==2.9.0
+moderngl==5.12.0
 networkx==3.4.2
 numpy==2.2.6
+pillow==11.2.1
 pyglm==2.8.2
 PyOpenGL==3.1.9
 PyOpenGL-accelerate==3.1.9

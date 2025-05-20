@@ -5,9 +5,9 @@ import glm
 import glfw
 import math
 
-
 class Camera:
-    def __init__(self, fator, position=(0, 0, 5), target=(0, 0, 0), up=(0, 1, 0), aspect_ratio=16/9):
+    def __init__(self, fator, position=(0, 0, 5), target=(0, 0, 0), up=(0, 1, 0), 
+                 aspect_ratio=16/9):
         self.target = np.array(target, dtype=np.float32)
         self.world_up = np.array(up, dtype=np.float32)
         self.yaw = -90.0   # Olhando para +z inicialmente
@@ -15,13 +15,14 @@ class Camera:
         self.speed = 0.5
         self.sensitivity = 0.3
         self.aspect_ratio = aspect_ratio
+        self.distancia_inicial = 4
 
         # Calcula o raio do planeta com base no fator
         self.raio_planeta = fator / (2 * math.sin(math.pi / 5))
 
-        # Define posição inicial com base no raio
-        distance = 3.0 * self.raio_planeta  # 3 raios de distância
-        self.position = np.array(position if position is not None else [0, 0, distance], dtype=np.float32)
+        # Define posição inicial baseada em múltiplos do raio
+        distance = self.distancia_inicial * self.raio_planeta
+        self.position = np.array([0, 0, distance], dtype=np.float32)
 
         # Obter proporção da tela
         self.aspect_ratio = self.get_screen_aspect_ratio() or 16 / 9
@@ -65,7 +66,12 @@ class Camera:
         )
 
     def get_projection_matrix(self):
-        return glm.perspective(glm.radians(45.0), self.aspect_ratio, 0.1, 100.0 * self.raio_planeta)
+        return glm.perspective(
+            glm.radians(45.0), 
+            self.aspect_ratio, 
+            0.1, 
+            (self.distancia_inicial + 1) * self.raio_planeta * 10  # Ajuste o far plane
+        )
 
     def update(self):
         front = np.array([
