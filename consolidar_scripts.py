@@ -6,7 +6,11 @@ arquivos_especificos = [
     "README.md",
     "main.py",
     "window.py",
+    "unidade.py",
+    "provincia.py",
+    "planeta.py",
     "contexto.py",
+    "civilizacao.py",
     "camera.py",
     "rendering/buffers.py",
     "rendering/renderer.py",
@@ -16,8 +20,6 @@ arquivos_especificos = [
     "shaders/render_fs.glsl",
     "shaders/render_vs.glsl",
     "utils/font_renderer.py",
-    "utils/geografia.py",
-    "utils/poligonos.py",
     "requirements.txt"
 ]
 

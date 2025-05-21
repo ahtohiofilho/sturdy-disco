@@ -1,10 +1,8 @@
-from utils.poligonos import dicionario_poligonos
-from utils.geografia import definir_geografia
+from planeta import Planeta
 
 class Contexto:
-    def __init__(self, fator=7):
+    def __init__(self, fator=5):
         self.fator = fator
-        self.poligonos = dicionario_poligonos(fator)
-        self.geografia, self.num_civ = definir_geografia(self.poligonos, fator)
+        self.planeta = Planeta(self)
         self.ctx_mgl = None
         self.selected_province = None

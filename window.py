@@ -63,7 +63,7 @@ class Window:
             return None
 
         id = int(r * 255) + int(g * 255) * 256 + int(b * 255) * 256 * 256
-        nodes = list(self.contexto.geografia.nodes.keys())
+        nodes = list(self.contexto.planeta.geografia.nodes.keys())
 
         if id >= len(nodes):
             print(f"[ERRO] ID {id} fora do intervalo. Total de nós: {len(nodes)}")

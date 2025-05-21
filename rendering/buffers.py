@@ -7,13 +7,13 @@ def prepare_buffers(contexto):
     colors = []
     polygon_types = []
 
-    for key in contexto.geografia.nodes:
+    for key in contexto.planeta.geografia.nodes:
         try:
-            verts = contexto.poligonos[key]
+            verts = contexto.planeta.poligonos[key]
         except KeyError:
             continue
 
-        node_data = contexto.geografia.nodes[key]
+        node_data = contexto.planeta.geografia.nodes[key]
         color = node_data.get('cor_bioma', (255, 255, 255))
         r, g, b = [c / 255.0 for c in color]
 

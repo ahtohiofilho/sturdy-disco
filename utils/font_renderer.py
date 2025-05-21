@@ -11,7 +11,7 @@ class FontRenderer:
         self.char_width = char_width
         self.char_height = char_height
         self.texture_id = self._load_texture(font_texture_path)
-        self.shader = self._init_shader()  # Usa sua classe Shader
+        self.shader = self._init_shader()
         self.vao, self.vbo = self._init_buffers()
         self.buffer_size = 0
 
